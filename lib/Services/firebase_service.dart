@@ -8,157 +8,198 @@ class FirebaseService {
   static final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   static final FirebaseAuth _auth = FirebaseAuth.instance;
 
-  // Colecciones
-  static const String coleccionUsuarios = 'usuarios';
-  static const String coleccionRutas = 'rutas';
-  static const String coleccionViajes = 'viajes';
+  // Nombres de colecciones
+  static const String _colUsuarios = 'usuarios';
+  static const String _colRutas = 'rutas';
+  static const String _colViajes = 'viajes';
 
-  /// Obtener usuario autenticado actual de Firebase Auth
+  /// Usuario autenticado actual (Auth)
   static User? get usuarioActual => _auth.currentUser;
 
-  /// Cerrar sesión
-  static Future<void> cerrarSesion() async {
-    await _auth.signOut();
-  }
+  /// Cerrar sesión (Auth)
+  static Future<void> cerrarSesion() async => _auth.signOut();
 
   // ======================
-  // FUNCIONES USUARIO
+  // USUARIOS
   // ======================
 
-  /// Crea o actualiza un usuario en Firestore
+  /// Crear o actualizar un usuario en Firestore (id == uid de Auth).
   static Future<bool> guardarUsuario(Usuario usuario) async {
     try {
       await _firestore
-          .collection(coleccionUsuarios)
+          .collection(_colUsuarios)
           .doc(usuario.id)
           .set(usuario.toJson(), SetOptions(merge: true));
       return true;
     } catch (e) {
+      // Registra si usas Crashlytics
+      // FirebaseCrashlytics.instance.recordError(e, StackTrace.current);
+      // prints solo en desarrollo
+      // ignore: avoid_print
       print('Error guardando usuario: $e');
       return false;
     }
   }
 
-  /// Obtiene un usuario por ID
+  /// Obtener usuario por id (uid de Auth).
   static Future<Usuario?> obtenerUsuario(String idUsuario) async {
     try {
-      DocumentSnapshot doc = await _firestore.collection(coleccionUsuarios).doc(idUsuario).get();
+      final doc = await _firestore.collection(_colUsuarios).doc(idUsuario).get();
       if (!doc.exists) return null;
       return Usuario.fromJson(doc.data() as Map<String, dynamic>);
     } catch (e) {
+      // ignore: avoid_print
       print('Error obteniendo usuario: $e');
       return null;
     }
   }
 
-  /// Verifica si un correo ya está registrado
-  static Future<bool> verificarCorreoExistente(String correo) async {
+  /// Verificar si correo institucional ya está registrado en usuarios.
+  static Future<bool> existeCorreoInstitucional(String correoInstitucional) async {
     try {
-      QuerySnapshot query = await _firestore.collection(coleccionUsuarios)
-          .where('correo_institucional', isEqualTo: correo)
+      final snap = await _firestore
+          .collection(_colUsuarios)
+          .where('correo_institucional', isEqualTo: correoInstitucional.trim())
           .limit(1)
           .get();
-      return query.docs.isNotEmpty;
+      return snap.docs.isNotEmpty;
     } catch (e) {
-      print('Error verificando correo: $e');
+      // ignore: avoid_print
+      print('Error verificando correo institucional: $e');
       return false;
     }
   }
 
   // ======================
-  // FUNCIONES RUTA
+  // RUTAS
   // ======================
 
-  /// Crea una nueva ruta
+  /// Crear ruta (el id debe venir generado en el modelo).
   static Future<bool> crearRuta(Ruta ruta) async {
     try {
-      await _firestore.collection(coleccionRutas).doc(ruta.id).set(ruta.toJson());
+      await _firestore.collection(_colRutas).doc(ruta.id).set(ruta.toJson());
       return true;
     } catch (e) {
+      // ignore: avoid_print
       print('Error creando ruta: $e');
       return false;
     }
+  
   }
 
-  /// Obtiene rutas activas
+  /// Obtener rutas activas (estado == 'activa').
   static Future<List<Ruta>> obtenerRutasActivas() async {
     try {
-      QuerySnapshot snapshot = await _firestore
-          .collection(coleccionRutas)
-          .where('estado', isEqualTo: 'activa')
+      final snap = await _firestore
+          .collection(_colRutas)
+          .where('estado', isEqualTo: _enumToStringEstadoRuta(EstadoRuta.activa))
           .get();
 
-      return snapshot.docs
-          .map((doc) => Ruta.fromJson(doc.data() as Map<String, dynamic>))
+      return snap.docs
+          .map((d) => Ruta.fromJson(d.data() as Map<String, dynamic>))
           .toList();
     } catch (e) {
+      // ignore: avoid_print
       print('Error obteniendo rutas activas: $e');
       return [];
     }
   }
 
-  // ======================
-  // FUNCIONES VIAJE
-  // ======================
-
-  /// Crea solicitud de viaje
-  static Future<bool> crearSolicitudViaje(Viaje viaje) async {
+  /// Buscar rutas activas con filtro opcional por fecha de salida mínima.
+  /// Asegúrate que el campo se llame 'fecha_hora_salida' y sea Timestamp.
+  static Future<List<Ruta>> buscarRutasActivas({DateTime? fechaMinima}) async {
     try {
-      await _firestore.collection(coleccionViajes).doc(viaje.id).set(viaje.toJson());
+      Query q = _firestore
+          .collection(_colRutas)
+          .where('estado', isEqualTo: _enumToStringEstadoRuta(EstadoRuta.activa));
+
+      if (fechaMinima != null) {
+        q = q.where('fecha_hora_salida', isGreaterThanOrEqualTo: Timestamp.fromDate(fechaMinima));
+      }
+
+      final snap = await q.get();
+      return snap.docs.map((d) => Ruta.fromJson(d.data() as Map<String, dynamic>)).toList();
+    } catch (e) {
+      // ignore: avoid_print
+      print('Error buscando rutas activas: $e');
+      return [];
+    }
+  }
+
+  /// Actualizar estado de una ruta.
+  static Future<bool> actualizarEstadoRuta({
+    required String idRuta,
+    required EstadoRuta nuevoEstado,
+  }) async {
+    try {
+      await _firestore.collection(_colRutas).doc(idRuta).update({
+        'estado': _enumToStringEstadoRuta(nuevoEstado),
+      });
       return true;
     } catch (e) {
+      // ignore: avoid_print
+      print('Error actualizando estado de ruta: $e');
+      return false;
+    }
+  }
+
+  // ======================
+  // VIAJES
+  // ======================
+
+  /// Crear solicitud de viaje.
+  static Future<bool> crearSolicitudViaje(Viaje viaje) async {
+    try {
+      await _firestore.collection(_colViajes).doc(viaje.id).set(viaje.toJson());
+      return true;
+    } catch (e) {
+      // ignore: avoid_print
       print('Error creando solicitud de viaje: $e');
       return false;
     }
   }
 
-  /// Obtiene viajes de un pasajero
+  /// Obtener viajes por pasajero.
   static Future<List<Viaje>> obtenerViajesPorPasajero(String idPasajero) async {
     try {
-      QuerySnapshot snapshot = await _firestore
-          .collection(coleccionViajes)
+      final snap = await _firestore
+          .collection(_colViajes)
           .where('id_pasajero', isEqualTo: idPasajero)
           .get();
 
-      return snapshot.docs
-          .map((doc) => Viaje.fromJson(doc.data() as Map<String, dynamic>))
+      return snap.docs
+          .map((d) => Viaje.fromJson(d.data() as Map<String, dynamic>))
           .toList();
     } catch (e) {
-      print('Error obteniendo viajes: $e');
+      // ignore: avoid_print
+      print('Error obteniendo viajes por pasajero: $e');
       return [];
     }
   }
-  static Future<List<Ruta>> buscarRutasActivas({DateTime? fechaMinima}) async {
+
+  /// Actualizar estado de viaje (usa string para no acoplar a un enum aquí).
+  /// Si en tu modelo usas enum, convierte antes a string (v.toString().split('.').last).
+  static Future<bool> actualizarEstadoViaje({
+    required String idViaje,
+    required String nuevoEstado,
+  }) async {
     try {
-      Query query = _firestore
-          .collection(coleccionRutas)
-          .where('estado', isEqualTo: 'activa');
-
-      if (fechaMinima != null) {
-        query = query.where('fecha', isGreaterThanOrEqualTo: Timestamp.fromDate(fechaMinima));
-      }
-
-      QuerySnapshot snapshot = await query.get();
-
-      return snapshot.docs
-          .map((doc) => Ruta.fromJson(doc.data() as Map<String, dynamic>))
-          .toList();
-    } catch (e) {
-      print('Error buscando rutas activas: $e');
-      return [];
-    }
-  }
-  /// Actualiza estado de un viaje
-  static Future<bool> actualizarEstadoViaje(String idViaje, String nuevoEstado) async {
-    try {
-      await _firestore
-          .collection(coleccionViajes)
-          .doc(idViaje)
-          .update({'estado': nuevoEstado});
+      await _firestore.collection(_colViajes).doc(idViaje).update({'estado': nuevoEstado});
       return true;
     } catch (e) {
-      print('Error actualizando estado viaje: $e');
+      // ignore: avoid_print
+      print('Error actualizando estado de viaje: $e');
       return false;
     }
+  }
+
+  // ======================
+  // HELPERS PRIVADOS
+  // ======================
+
+  /// Convierte enum EstadoRuta a string tal como se guarda en Firestore.
+  static String _enumToStringEstadoRuta(EstadoRuta estado) {
+    // Resultado: 'activa', 'inactiva', etc.
+    return estado.toString().split('.').last;
   }
 }
